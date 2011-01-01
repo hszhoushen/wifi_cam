@@ -34,14 +34,15 @@
 void error_handling(char * message);
 
 int tcp_init(int argc, char * argv[]);
-int socket = 0;
+int serv_sock;
+int clnt_sock;
 
 #define port "10086"
 
-
-
-
+//hszhoushen
 int process_mjpg(unsigned char * p);
+int send_mjpg(unsigned char *p, size_t len);
+int save_mjpg(unsigned char *p, size_t len);
 
 typedef enum {
         IO_METHOD_READ,
@@ -64,29 +65,23 @@ static unsigned int     n_buffers       = 0;
 
 static void errno_exit(const char * s)
 {
-        fprintf (stderr, "%s error %d, %s\n",
-                 s, errno, strerror (errno));
-
-        exit (EXIT_FAILURE);
+    fprintf (stderr, "%s error %d, %s\n",
+             s, errno, strerror (errno));
+    exit (EXIT_FAILURE);
 }
 
 static int xioctl(int fd,int request,void * arg)
 {
-        int r;
+    int r;
 
-        do r = ioctl (fd, request, arg);
-        while (-1 == r && EINTR == errno);
+    do r = ioctl (fd, request, arg);
+    while (-1 == r && EINTR == errno);
 
-        return r;
+    return r;
 }
 
-static void process_image(const void * p)
-{
-        fputc ('.', stdout);
-        fflush (stdout);
-}
-
-
+//hszhoushen
+//function:remove the redundant 00 and return the size of jpg
 int process_mjpg(unsigned char * p)
 {
 	int len = 0;
@@ -108,279 +103,224 @@ int process_mjpg(unsigned char * p)
 	}
 	return -1;
 }
+//hszhoushen
+//function:send the picture to client
+int send_mjpg(unsigned char *p, size_t len)
+{
+	FILE * fp = NULL;
+	fp = fopen("test1.jpg", "w");
+	if(fp == NULL)
+		return -1;
+	
+	//如果获取数据异常，退出
+	if(len == -1) return -1;
+	//获取循环次数，和最后多余数据
+	int num = len/4096;
+	int yushu = len%4096;
+	printf("num = %d, yushu = %d\n", num, yushu);
+	//定义循环变量
+	size_t j = 0;
+	//定义发送字符串
+	char send_buf[4096]={0};
+
+	//循环发送数据到client
+	for(j = 0; j < num; j++)
+	{
+		memcpy(send_buf, p+j*4096, 4096);
+		
+		if(send(clnt_sock, send_buf, 4096, 0) < 0)
+		{
+			perror("send");
+		}
+
+		fwrite(send_buf, sizeof(send_buf), 1, fp);
+		memset(send_buf, 0, sizeof(send_buf));
+	}
+
+	//剩余部分数据发送到client
+
+	memcpy(send_buf, p+j*4096, yushu);
+	fwrite(send_buf, yushu, 1, fp);
+	
+	if(send(clnt_sock, send_buf, yushu, 0) < 0)
+	{
+		perror("send");
+	}
+
+	sync();
+	fclose(fp);
+	
+	return 0;
+}
+
+int save_mjpg(unsigned char *p, size_t len)
+{
+	FILE * fp = NULL;
+	fp = fopen("test.jpg", "w");
+	if(fp != NULL)
+	{
+		fwrite(p, 1, len, fp);
+		sync();
+		fclose(fp);
+	}
+	else
+	{
+		return -1;
+	}
+	return 0;
+}
+
 //从内核缓冲区取出一帧数据
 static int read_frame(void)
 {
-        struct v4l2_buffer buf;
-        unsigned int i;
-		
-		size_t len = 0;
+    struct v4l2_buffer buf;
+    unsigned int i;
+	char send_buf[4096] = {0};
+	char temp_buf[50] = {0};
+	
+	size_t len = 0;
 
-        switch (io) 
+    CLEAR (buf);
+
+    buf.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+    buf.memory = V4L2_MEMORY_MMAP;
+	/*从内核环形缓冲区取出一帧数据*/
+    if (-1 == xioctl (fd, VIDIOC_DQBUF, &buf)) 
+	{
+        switch (errno) 
 		{
-	        case IO_METHOD_READ:
-	                if (-1 == read (fd, buffers[0].start, buffers[0].length)) {
-	                        switch (errno) {
-	                        case EAGAIN:
-	                                return 0;
+            case EAGAIN:
+                    return 0;
 
-	                        case EIO:
-	                                /* Could ignore EIO, see spec. */
+            case EIO:
+                    /* Could ignore EIO, see spec. */
 
-	                                /* fall through */
+                    /* fall through */
 
-	                        default:
-	                                errno_exit ("read");
-	                        }
-	                }
+            default:
+                    errno_exit ("VIDIOC_DQBUF");
+        }
+    }
+	
+    assert (buf.index < n_buffers);
+	
+	//move the redundant 00,and get the size of jpg
+	len = process_mjpg(buffers[buf.index].start);
+	if(len != -1){
+		buffers[buf.index].length = len;	
+		printf("len = %d\n", buffers[buf.index].length);		
+	}
 
-	                process_image (buffers[0].start);
+	//send_mjpg to the client
+	send_mjpg(buffers[buf.index].start, len);
+	
+	//保存为图片  test.jpg
+	save_mjpg(buffers[buf.index].start, len);
 
-					
-	                break;
-
-	        case IO_METHOD_MMAP:
-	                CLEAR (buf);
-
-	                buf.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
-	                buf.memory = V4L2_MEMORY_MMAP;
-					/*从内核环形缓冲区取出一帧数据*/
-	                if (-1 == xioctl (fd, VIDIOC_DQBUF, &buf)) {
-	                        switch (errno) {
-		                        case EAGAIN:
-		                                return 0;
-
-		                        case EIO:
-		                                /* Could ignore EIO, see spec. */
-
-		                                /* fall through */
-
-		                        default:
-		                                errno_exit ("VIDIOC_DQBUF");
-	                        }
-	                }
-					
-				
-
-	                assert (buf.index < n_buffers);
-
-	                process_image (buffers[buf.index].start);
-
-//2015.12.12_18:33:zhou_add
-#if 1	
-					len = process_mjpg(buffers[buf.index].start);
-					if(len != -1){
-						buffers[buf.index].length = len;
-
-//						buffers[buf.index].length = 6555500;  it's ok
-							
-						printf("len = %d\n", buffers[buf.index].length);
-						
-					}
-					
-					//保存为图片  test.jpg
-					FILE * fp = NULL;
-					fp = fopen("test.jpg", "w");
-					if(fp != NULL)
-					{
-						fwrite(buffers[buf.index].start, 1,buffers[buf.index].length, fp);
-						sync();
-						fclose(fp);
-					}
-#endif
-//end
-
-	                if (-1 == xioctl (fd, VIDIOC_QBUF, &buf))
-	                        errno_exit ("VIDIOC_QBUF");
-
-	                break;
-
-	        case IO_METHOD_USERPTR:
-	                CLEAR (buf);
-
-	                buf.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
-	                buf.memory = V4L2_MEMORY_USERPTR;
-
-	                if (-1 == xioctl (fd, VIDIOC_DQBUF, &buf)) {
-	                        switch (errno) {
-	                        case EAGAIN:
-	                                return 0;
-
-	                        case EIO:
-	                                /* Could ignore EIO, see spec. */
-
-	                                /* fall through */
-
-	                        default:
-	                                errno_exit ("VIDIOC_DQBUF");
-	                        }
-	                }
-
-	                for (i = 0; i < n_buffers; ++i)
-	                        if (buf.m.userptr == (unsigned long) buffers[i].start
-	                            && buf.length == buffers[i].length)
-	                                break;
-
-	                assert (i < n_buffers);
-
-	                process_image ((void *) buf.m.userptr);
-
-	                if (-1 == xioctl (fd, VIDIOC_QBUF, &buf))
-	                        errno_exit ("VIDIOC_QBUF");
-
-	                break;
-	        }
-        	return 1;
+    if (-1 == xioctl (fd, VIDIOC_QBUF, &buf))
+            errno_exit ("VIDIOC_QBUF");
+      
+    return 1;
 }
 
 static void mainloop(void)
 {
-        unsigned int count;
+    unsigned int count;
 
-        count = 1;
+    count = 1;
 
-        while (count-- > 0) 
+    while (count-- > 0) 
+	{
+        for (;;) 
 		{
-                for (;;) 
-				{
-                        fd_set fds;
-                        struct timeval tv;
-                        int r;
+            fd_set fds;
+            struct timeval tv;
+            int r;
 
-                        FD_ZERO (&fds);
-                        FD_SET (fd, &fds);
+            FD_ZERO (&fds);
+            FD_SET (fd, &fds);
 
-                        /* Timeout. */
-                        tv.tv_sec = 2;
-                        tv.tv_usec = 0;
+            /* Timeout. */
+            tv.tv_sec = 2;
+            tv.tv_usec = 0;
 
-                        r = select (fd + 1, &fds, NULL, NULL, &tv);
+            r = select (fd + 1, &fds, NULL, NULL, &tv);
 
-                        if (-1 == r) 
-						{
-                                if (EINTR == errno)
-                                        continue;
+            if (-1 == r) 
+			{
+                    if (EINTR == errno)
+                            continue;
+                    errno_exit ("select");
+            }
 
-                                errno_exit ("select");
-                        }
+            if (0 == r) {
+                    fprintf (stderr, "select timeout\n");
+                    exit (EXIT_FAILURE);
+            }
 
-                        if (0 == r) {
-                                fprintf (stderr, "select timeout\n");
-                                exit (EXIT_FAILURE);
-                        }
-
-                        if (read_frame ())
-                                break;
-        
-                        /* EAGAIN - continue select loop. */
-                }
+            if (read_frame())
+                break;
+            /* EAGAIN - continue select loop. */
         }
+    }
 }
 
-static void
-stop_capturing                  (void)
+static void stop_capturing(void)
 {
-        enum v4l2_buf_type type;
+    enum v4l2_buf_type type;
 
-        switch (io) {
-        case IO_METHOD_READ:
-                /* Nothing to do. */
-                break;
+    switch (io) 
+	{
+	    case IO_METHOD_READ:
+	            /* Nothing to do. */
+	            break;
 
-        case IO_METHOD_MMAP:
-        case IO_METHOD_USERPTR:
-                type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+	    case IO_METHOD_MMAP:
+	    case IO_METHOD_USERPTR:
+	            type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
 
-                if (-1 == xioctl (fd, VIDIOC_STREAMOFF, &type))
-                        errno_exit ("VIDIOC_STREAMOFF");
-
-                break;
-        }
+	            if (-1 == xioctl (fd, VIDIOC_STREAMOFF, &type))
+	                   errno_exit ("VIDIOC_STREAMOFF");
+	            break;
+    }
 }
 
 static void start_capturing(void)
 {
-        unsigned int i;
-        enum v4l2_buf_type type;
+    unsigned int i;
+    enum v4l2_buf_type type;
 
-        switch (io) 
-		{
-	        case IO_METHOD_READ:
-	                /* Nothing to do. */
-	                break;
+    for (i = 0; i < n_buffers; ++i) 
+	{
+        struct v4l2_buffer buf;
 
-	        case IO_METHOD_MMAP:
-	                for (i = 0; i < n_buffers; ++i) 
-					{
-	                        struct v4l2_buffer buf;
+        CLEAR (buf);
 
-	                        CLEAR (buf);
+		/*1.将内存放入缓冲区*/
+        buf.type        = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+        buf.memory      = V4L2_MEMORY_MMAP;
+        buf.index       = i;
 
-							/*1.将内存放入缓冲区*/
-	                        buf.type        = V4L2_BUF_TYPE_VIDEO_CAPTURE;
-	                        buf.memory      = V4L2_MEMORY_MMAP;
-	                        buf.index       = i;
+        if (-1 == xioctl (fd, VIDIOC_QBUF, &buf))
+                errno_exit ("VIDIOC_QBUF");
+    }
+    
+    type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
 
-	                        if (-1 == xioctl (fd, VIDIOC_QBUF, &buf))
-	                                errno_exit ("VIDIOC_QBUF");
-	                }
-	                
-	                type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
-
-					/*2.开始传输采集图像*/
-	                if (-1 == xioctl (fd, VIDIOC_STREAMON, &type))
-	                        errno_exit ("VIDIOC_STREAMON");
-
-	                break;
-
-	        case IO_METHOD_USERPTR:
-	                for (i = 0; i < n_buffers; ++i) 
-					{
-	                        struct v4l2_buffer buf;
-
-	                        CLEAR (buf);
-
-	                        buf.type        = V4L2_BUF_TYPE_VIDEO_CAPTURE;
-	                        buf.memory      = V4L2_MEMORY_USERPTR;
-	                        buf.index       = i;
-	                        buf.m.userptr   = (unsigned long) buffers[i].start;
-	                        buf.length      = buffers[i].length;
-
-	                        if (-1 == xioctl (fd, VIDIOC_QBUF, &buf))
-	                                errno_exit ("VIDIOC_QBUF");
-	                }
-
-	                type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
-
-	                if (-1 == xioctl (fd, VIDIOC_STREAMON, &type))
-	                        errno_exit ("VIDIOC_STREAMON");
-
-	                break;
-	        }
+	/*2.开始传输采集图像*/
+    if (-1 == xioctl (fd, VIDIOC_STREAMON, &type))
+            errno_exit ("VIDIOC_STREAMON");
+	  
 }
 
 static void uninit_device(void)
 {
-        unsigned int i;
+    unsigned int i;
 
-        switch (io) {
-        case IO_METHOD_READ:
-                free (buffers[0].start);
-                break;
-
-        case IO_METHOD_MMAP:
-                for (i = 0; i < n_buffers; ++i)
-                        if (-1 == munmap (buffers[i].start, buffers[i].length))
-                                errno_exit ("munmap");
-                break;
-
-        case IO_METHOD_USERPTR:
-                for (i = 0; i < n_buffers; ++i)
-                        free (buffers[i].start);
-                break;
-        }
-
-        free (buffers);
+	for (i = 0; i < n_buffers; ++i)
+	        if (-1 == munmap (buffers[i].start, buffers[i].length))
+	                errno_exit ("munmap");
+    free (buffers);
 }
 
 static void init_read(unsigned int buffer_size)
@@ -404,60 +344,62 @@ static void init_read(unsigned int buffer_size)
 
 static void init_mmap(void)
 {
-        struct v4l2_requestbuffers req;
+    struct v4l2_requestbuffers req;
 
-        CLEAR (req);
+    CLEAR (req);
 
-        req.count               = 4;
-        req.type                = V4L2_BUF_TYPE_VIDEO_CAPTURE;
-        req.memory              = V4L2_MEMORY_MMAP;
+    req.count        = 4;
+    req.type         = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+    req.memory       = V4L2_MEMORY_MMAP;
 
-        if (-1 == xioctl (fd, VIDIOC_REQBUFS, &req)) {
-                if (EINVAL == errno) {
-                        fprintf (stderr, "%s does not support "
-                                 "memory mapping\n", dev_name);
-                        exit (EXIT_FAILURE);
-                } else {
-                        errno_exit ("VIDIOC_REQBUFS");
-                }
-        }
-
-        if (req.count < 2) {
-                fprintf (stderr, "Insufficient buffer memory on %s\n",
-                         dev_name);
+    if (-1 == xioctl (fd, VIDIOC_REQBUFS, &req)) 
+	{
+        if (EINVAL == errno) {
+                fprintf (stderr, "%s does not support "
+                         "memory mapping\n", dev_name);
                 exit (EXIT_FAILURE);
+        } 
+		else {
+                errno_exit ("VIDIOC_REQBUFS");
         }
+    }
 
-        buffers = calloc (req.count, sizeof (*buffers));
+    if (req.count < 2) {
+            fprintf (stderr, "Insufficient buffer memory on %s\n",
+                     dev_name);
+            exit (EXIT_FAILURE);
+    }
 
-        if (!buffers) {
-                fprintf (stderr, "Out of memory\n");
-                exit (EXIT_FAILURE);
-        }
+    buffers = calloc (req.count, sizeof (*buffers));
 
-        for (n_buffers = 0; n_buffers < req.count; ++n_buffers) {
-                struct v4l2_buffer buf;
+    if (!buffers) {
+            fprintf (stderr, "Out of memory\n");
+            exit (EXIT_FAILURE);
+    }
 
-                CLEAR (buf);
+    for (n_buffers = 0; n_buffers < req.count; ++n_buffers) {
+            struct v4l2_buffer buf;
 
-                buf.type        = V4L2_BUF_TYPE_VIDEO_CAPTURE;
-                buf.memory      = V4L2_MEMORY_MMAP;
-                buf.index       = n_buffers;
+            CLEAR (buf);
 
-                if (-1 == xioctl (fd, VIDIOC_QUERYBUF, &buf))
-                        errno_exit ("VIDIOC_QUERYBUF");
+            buf.type        = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+            buf.memory      = V4L2_MEMORY_MMAP;
+            buf.index       = n_buffers;
 
-                buffers[n_buffers].length = buf.length;
-                buffers[n_buffers].start =
-                        mmap (NULL /* start anywhere */,
-                              buf.length,
-                              PROT_READ | PROT_WRITE /* required */,
-                              MAP_SHARED /* recommended */,
-                              fd, buf.m.offset);
+            if (-1 == xioctl (fd, VIDIOC_QUERYBUF, &buf))
+                    errno_exit ("VIDIOC_QUERYBUF");
 
-                if (MAP_FAILED == buffers[n_buffers].start)
-                        errno_exit ("mmap");
-        }
+            buffers[n_buffers].length = buf.length;
+            buffers[n_buffers].start =
+                    mmap (NULL /* start anywhere */,
+                          buf.length,
+                          PROT_READ | PROT_WRITE /* required */,
+                          MAP_SHARED /* recommended */,
+                          fd, buf.m.offset);
+
+            if (MAP_FAILED == buffers[n_buffers].start)
+                    errno_exit ("mmap");
+    }
 }
 
 static void init_userp(unsigned int buffer_size)
@@ -588,6 +530,7 @@ static void init_device(void)
 
 
         /* Select video input, video standard and tune here. */
+		/* set video param */
 
 
         CLEAR (cropcap);
@@ -608,7 +551,8 @@ static void init_device(void)
                                 break;
                         }
                 }
-        } else {        
+        } 
+		else {        
                 /* Errors ignored. */
         }
 
@@ -636,54 +580,45 @@ static void init_device(void)
         if (fmt.fmt.pix.sizeimage < min)
                 fmt.fmt.pix.sizeimage = min;
 
-        switch (io) {
-        case IO_METHOD_READ:
-                init_read (fmt.fmt.pix.sizeimage);
-                break;
-
-        case IO_METHOD_MMAP:
-                init_mmap ();
-                break;
-
-        case IO_METHOD_USERPTR:
-                init_userp (fmt.fmt.pix.sizeimage);
-                break;
-        }
+        init_mmap ();
 }
 
 static void close_device(void)
 {
-        if (-1 == close (fd))
-                errno_exit ("close");
+    if (-1 == close (fd))
+            errno_exit ("close");
 
-        fd = -1;
+    fd = -1;
 }
 
 static void  open_device(void)
 {
-        struct stat st; 
+	struct stat st; 
 
-        if (-1 == stat (dev_name, &st)) {
-                fprintf (stderr, "Cannot identify '%s': %d, %s\n",
-                         dev_name, errno, strerror (errno));
-                exit (EXIT_FAILURE);
-        }
+	if (-1 == stat (dev_name, &st)) 
+	{
+	        fprintf (stderr, "Cannot identify '%s': %d, %s\n",
+	                 dev_name, errno, strerror (errno));
+	        exit (EXIT_FAILURE);
+	}
 
-        if (!S_ISCHR (st.st_mode)) {
-                fprintf (stderr, "%s is no device\n", dev_name);
-                exit (EXIT_FAILURE);
-        }
+	if (!S_ISCHR (st.st_mode)) 
+	{
+	        fprintf (stderr, "%s is no device\n", dev_name);
+	        exit (EXIT_FAILURE);
+	}
 
-		//非阻塞模式，应用程序能够使用阻塞模式或非阻塞模式打开视频设备，
-		//如果使用非阻塞模式调用视频设备，即使尚未捕获到信息，驱动依旧会把缓存（DQBUFF）里的东西返回给应用程序。
-        fd = open (dev_name, O_RDWR /* required */ | O_NONBLOCK, 0);
+	//非阻塞模式，应用程序能够使用阻塞模式或非阻塞模式打开视频设备，
+	//如果使用非阻塞模式调用视频设备，即使尚未捕获到信息，驱动依旧会把缓存（DQBUFF）里的东西返回给应用程序。
+	fd = open (dev_name, O_RDWR /* required */ | O_NONBLOCK, 0);
 
 
-        if (-1 == fd) {
-                fprintf (stderr, "Cannot open '%s': %d, %s\n",
-                         dev_name, errno, strerror (errno));
-                exit (EXIT_FAILURE);
-        }
+	if (-1 == fd) 
+	{
+	        fprintf (stderr, "Cannot open '%s': %d, %s\n",
+	                 dev_name, errno, strerror (errno));
+	        exit (EXIT_FAILURE);
+	}
 		
 }
 
@@ -715,73 +650,96 @@ long_options [] = {
 
 int main(int  argc,  char * argv[])
 {
-        dev_name = "/dev/video0";
+	dev_name = "/dev/video0";
 
-		printf("tcp init\n\r");
+	printf("open device\n\r");
+	open_device ();	
 
-		tcp_init(argc, argv);
+	printf("Init device\r\n");
+	init_device ();
 
-		printf("open device\n\r");
-        open_device ();	
-		
-		printf("Init device\r\n");
-        init_device ();
+	printf("start_capture\n");
+	start_capturing ();
 
-		printf("start_capture\n");
-        start_capturing ();
+	printf("tcp init\n\r");
+	tcp_init(argc, argv);
+	
+	printf("main_loop\n");
+	mainloop ();
 
-		printf("main_loop\n");
-        mainloop ();
+	printf("stop capturing\n");
+	stop_capturing ();
 
-		printf("stop capturing\n");
-        stop_capturing ();
-		
-		printf("uninit device\n");
-        uninit_device ();
+	printf("uninit device\n");
+	uninit_device ();
 
-		printf("close device\n");
-        close_device ();
+	printf("close device\n");
+	close_device ();
 
-		close(socket);
-        exit (EXIT_SUCCESS);
+	close(clnt_sock);
+	close(serv_sock);
+	exit (EXIT_SUCCESS);
 
-        return 0;
+	return 0;
 }
 
 
 int tcp_init(int argc, char * argv[])
 {
 
-	struct sockaddr_in  serv_addr;
-	char message[30];
-	int str_len;
+	struct sockaddr_in serv_addr;
+	struct sockaddr_in clnt_addr;
 
-	if(argc != 2)
-	{
-		printf("Usage : %s <IP> \n", argv[0]);
-		exit(1);
-	}
+	socklen_t clnt_addr_size;
 
-	sock = socket(PF_INET, SOCK_STREAM, 0);
-	if(sock == -1)
+	char message[] = "hello world!";
+	char ip[20];
+
+	serv_sock = socket(PF_INET, SOCK_STREAM, 0);
+	if(serv_sock == -1)
 		error_handling("socket() error");
 
 	memset(&serv_addr, 0, sizeof(serv_addr));
-	serv_addr.sin_family  = AF_INET;
-	serv_addr.sin_addr.s_addr = inet_addr(argv[1]);
+	serv_addr.sin_family = AF_INET;
+	serv_addr.sin_addr.s_addr = htonl(INADDR_ANY);
 	serv_addr.sin_port = htons(atoi(port));
 
-	if(connect(sock, (struct sockaddr*)&serv_addr, sizeof(serv_addr)) == -1)
-		error_handling("connect() error");
+	if(bind(serv_sock, (struct sockaddr *)&serv_addr, sizeof(serv_addr)) == -1)
+		error_handling("bind() error");
 
-	str_len = read(sock, message, sizeof(message) - 1);
-	if(str_len == -1)
-		error_handling("read() error!");
+	if(listen(serv_sock, 5) == -1)
+		error_handling("listen() error");
 
-	printf("Message from server : %s \n", message);
+//	while(1)
+//	{
+		memset(&clnt_addr, 0, sizeof(clnt_addr));
+		clnt_addr_size = sizeof(struct sockaddr_in);
+
+		//等待接受新的连接到来，并返回新连接的套接字描述符，accept默认为阻塞函数
+		clnt_sock = accept(serv_sock,(struct sockaddr *)&clnt_addr, &clnt_addr_size);
+		if(clnt_sock < 0){
+			perror("accept");
+			exit(1);
+		}
+		
+		//将新的连接的二进制地址转换成点分十进制，和端口号一起打印
+		inet_ntop(AF_INET, (void *)&clnt_addr.sin_addr, ip, clnt_addr_size);
+		printf("Remote request the current time :%s(%d)\n",ip, ntohs(clnt_addr.sin_port));
+
+		//向新连接发送时间t,send返回发送的数据大小，失败返回-1
+		if(send(clnt_sock, message, sizeof(message), 0))
+		{
+			perror("send");
+		}
+		//关闭描述符，与新连接的通信结束
+//		close(clnt_sock);
+//	}
 
 
-	return 0;
+//	write(clnt_sock, message, sizeof(message));
+//	close(serv_sock);
+
+	return 0;		
 }
 
 void error_handling(char * message)
