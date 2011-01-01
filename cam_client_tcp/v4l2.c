@@ -9,9 +9,6 @@
 #include <string.h>
 #include <assert.h>
 
-
-#include <getopt.h>             /* getopt_long() */
-
 #include <fcntl.h>              /* low-level i/o */
 #include <unistd.h>
 #include <errno.h>
@@ -23,24 +20,21 @@
 #include <sys/ioctl.h>
 
 #include <asm/types.h>          /* for videodev2.h */
-
 #include <linux/videodev2.h>
 
 //tcp
 #include <arpa/inet.h>
 #include <sys/socket.h>
 
-//tcp
+//tcp_hszhoushen
 void error_handling(char * message);
-
 int tcp_init(int argc, char * argv[]);
 int serv_sock;
 int clnt_sock;
-
 #define port "10086"
 
 //hszhoushen
-int process_mjpg(unsigned char * p);
+size_t process_mjpg(unsigned char * p);
 int send_mjpg(unsigned char *p, size_t len);
 int save_mjpg(unsigned char *p, size_t len);
 
@@ -52,7 +46,8 @@ typedef enum {
 
 #define CLEAR(x) memset (&(x), 0, sizeof (x))
 
-struct buffer {
+struct buffer 
+{
         void *                  start;
         size_t                  length;
 };
@@ -82,24 +77,33 @@ static int xioctl(int fd,int request,void * arg)
 
 //hszhoushen
 //function:remove the redundant 00 and return the size of jpg
-int process_mjpg(unsigned char * p)
+size_t process_mjpg(unsigned char * p)
 {
-	int len = 0;
+	size_t len = 0;
 	while(p != NULL)
 	{
-		if((*p) == 255)		//ff
+		//ff 
+		if((*p) == 255)		//printf("%x", *p);
 		{
-//			printf("%x\n", (*p));
+			//检测下一个是不是d9
 			p++;
 			len++;
-			if((*p) == 217)	//d9
+			//d9
+			if((*p) == 217)	
 			{
-				printf("%x\n", *p);
+				printf("*p = %x\n", *p);
 				return len+1;
 			}
+			else
+			{
+				continue;
+			}
 		}
-		len++;
-		p++;
+		else
+		{
+			len++;
+			p++;
+		}
 	}
 	return -1;
 }
@@ -130,9 +134,10 @@ int send_mjpg(unsigned char *p, size_t len)
 		
 		if(send(clnt_sock, send_buf, 4096, 0) < 0)
 		{
+			memset(send_buf, 0, sizeof(send_buf));
 			perror("send");
+			continue;
 		}
-
 		fwrite(send_buf, sizeof(send_buf), 1, fp);
 		memset(send_buf, 0, sizeof(send_buf));
 	}
@@ -152,7 +157,8 @@ int send_mjpg(unsigned char *p, size_t len)
 	
 	return 0;
 }
-
+//hszhoushen
+//function:save the mjpg
 int save_mjpg(unsigned char *p, size_t len)
 {
 	FILE * fp = NULL;
@@ -210,7 +216,6 @@ static int read_frame(void)
 		buffers[buf.index].length = len;	
 		printf("len = %d\n", buffers[buf.index].length);		
 	}
-
 	//send_mjpg to the client
 	send_mjpg(buffers[buf.index].start, len);
 	
@@ -265,6 +270,7 @@ static void mainloop(void)
     }
 }
 
+//停止采集
 static void stop_capturing(void)
 {
     enum v4l2_buf_type type;
@@ -285,6 +291,7 @@ static void stop_capturing(void)
     }
 }
 
+//开始采集
 static void start_capturing(void)
 {
     unsigned int i;
@@ -313,6 +320,7 @@ static void start_capturing(void)
 	  
 }
 
+//释放设备
 static void uninit_device(void)
 {
     unsigned int i;
@@ -323,23 +331,24 @@ static void uninit_device(void)
     free (buffers);
 }
 
+
 static void init_read(unsigned int buffer_size)
 {
-        buffers = calloc (1, sizeof (*buffers));
+    buffers = calloc (1, sizeof (*buffers));
 
-        if (!buffers) {
-                fprintf (stderr, "Out of memory\n");
-                exit (EXIT_FAILURE);
-        }
+    if (!buffers) {
+            fprintf (stderr, "Out of memory\n");
+            exit (EXIT_FAILURE);
+    }
 
-        buffers[0].length = buffer_size;
-        buffers[0].start = malloc (buffer_size);
+    buffers[0].length = buffer_size;
+    buffers[0].start = malloc (buffer_size);
 
-        if (!buffers[0].start) 
-		{
-                fprintf (stderr, "Out of memory\n");
-                exit (EXIT_FAILURE);
-        }
+    if (!buffers[0].start) 
+	{
+            fprintf (stderr, "Out of memory\n");
+            exit (EXIT_FAILURE);
+    }
 }
 
 static void init_mmap(void)
@@ -372,77 +381,80 @@ static void init_mmap(void)
 
     buffers = calloc (req.count, sizeof (*buffers));
 
-    if (!buffers) {
-            fprintf (stderr, "Out of memory\n");
-            exit (EXIT_FAILURE);
+    if (!buffers) 
+	{
+        fprintf (stderr, "Out of memory\n");
+        exit (EXIT_FAILURE);
     }
 
-    for (n_buffers = 0; n_buffers < req.count; ++n_buffers) {
-            struct v4l2_buffer buf;
+    for (n_buffers = 0; n_buffers < req.count; ++n_buffers) 
+	{
+        struct v4l2_buffer buf;
 
-            CLEAR (buf);
+        CLEAR (buf);
 
-            buf.type        = V4L2_BUF_TYPE_VIDEO_CAPTURE;
-            buf.memory      = V4L2_MEMORY_MMAP;
-            buf.index       = n_buffers;
+        buf.type        = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+        buf.memory      = V4L2_MEMORY_MMAP;
+        buf.index       = n_buffers;
 
-            if (-1 == xioctl (fd, VIDIOC_QUERYBUF, &buf))
-                    errno_exit ("VIDIOC_QUERYBUF");
+        if (-1 == xioctl (fd, VIDIOC_QUERYBUF, &buf))
+                errno_exit ("VIDIOC_QUERYBUF");
 
-            buffers[n_buffers].length = buf.length;
-            buffers[n_buffers].start =
-                    mmap (NULL /* start anywhere */,
-                          buf.length,
-                          PROT_READ | PROT_WRITE /* required */,
-                          MAP_SHARED /* recommended */,
-                          fd, buf.m.offset);
+        buffers[n_buffers].length = buf.length;
+        buffers[n_buffers].start =
+                mmap (NULL /* start anywhere */,
+                      buf.length,
+                      PROT_READ | PROT_WRITE /* required */,
+                      MAP_SHARED /* recommended */,
+                      fd, buf.m.offset);
 
-            if (MAP_FAILED == buffers[n_buffers].start)
-                    errno_exit ("mmap");
+        if (MAP_FAILED == buffers[n_buffers].start)
+                errno_exit ("mmap");
     }
 }
 
 static void init_userp(unsigned int buffer_size)
 {
-        struct v4l2_requestbuffers req;
-        unsigned int page_size;
+    struct v4l2_requestbuffers req;
+    unsigned int page_size;
 
-        page_size = getpagesize ();
-        buffer_size = (buffer_size + page_size - 1) & ~(page_size - 1);
+    page_size = getpagesize ();
+    buffer_size = (buffer_size + page_size - 1) & ~(page_size - 1);
 
-        CLEAR (req);
+    CLEAR (req);
 
-        req.count               = 4;
-        req.type                = V4L2_BUF_TYPE_VIDEO_CAPTURE;
-        req.memory              = V4L2_MEMORY_USERPTR;
+    req.count               = 4;
+    req.type                = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+    req.memory              = V4L2_MEMORY_USERPTR;
 
-        if (-1 == xioctl (fd, VIDIOC_REQBUFS, &req)) {
-                if (EINVAL == errno) {
-                        fprintf (stderr, "%s does not support "
-                                 "user pointer i/o\n", dev_name);
-                        exit (EXIT_FAILURE);
-                } else {
-                        errno_exit ("VIDIOC_REQBUFS");
-                }
-        }
+    if (-1 == xioctl (fd, VIDIOC_REQBUFS, &req)) {
+            if (EINVAL == errno) {
+                    fprintf (stderr, "%s does not support "
+                             "user pointer i/o\n", dev_name);
+                    exit (EXIT_FAILURE);
+            } else {
+                    errno_exit ("VIDIOC_REQBUFS");
+            }
+    }
 
-        buffers = calloc (4, sizeof (*buffers));
+    buffers = calloc (4, sizeof (*buffers));
 
-        if (!buffers) {
+    if (!buffers) {
+            fprintf (stderr, "Out of memory\n");
+            exit (EXIT_FAILURE);
+    }
+
+    for (n_buffers = 0; n_buffers < 4; ++n_buffers) 
+	{
+        buffers[n_buffers].length = buffer_size;
+        buffers[n_buffers].start = memalign (/* boundary */ page_size,
+                                             buffer_size);
+
+        if (!buffers[n_buffers].start) {
                 fprintf (stderr, "Out of memory\n");
                 exit (EXIT_FAILURE);
         }
-
-        for (n_buffers = 0; n_buffers < 4; ++n_buffers) {
-                buffers[n_buffers].length = buffer_size;
-                buffers[n_buffers].start = memalign (/* boundary */ page_size,
-                                                     buffer_size);
-
-                if (!buffers[n_buffers].start) {
-                        fprintf (stderr, "Out of memory\n");
-                        exit (EXIT_FAILURE);
-                }
-        }
+    }
 }
 
 static void init_device(void)
@@ -591,7 +603,7 @@ static void close_device(void)
     fd = -1;
 }
 
-static void  open_device(void)
+static void open_device(void)
 {
 	struct stat st; 
 
@@ -615,38 +627,27 @@ static void  open_device(void)
 
 	if (-1 == fd) 
 	{
-	        fprintf (stderr, "Cannot open '%s': %d, %s\n",
-	                 dev_name, errno, strerror (errno));
-	        exit (EXIT_FAILURE);
+        fprintf (stderr, "Cannot open '%s': %d, %s\n",
+                 dev_name, errno, strerror (errno));
+        exit (EXIT_FAILURE);
 	}
 		
 }
 
 static void usage(FILE * fp,int argc,char ** argv)
 {
-        fprintf (fp,
-                 "Usage: %s [options]\n\n"
-                 "Options:\n"
-                 "-d | --device name   Video device name [/dev/video]\n"
-                 "-h | --help          Print this message\n"
-                 "-m | --mmap          Use memory mapped buffers\n"
-                 "-r | --read          Use read() calls\n"
-                 "-u | --userp         Use application allocated buffers\n"
-                 "",
-                 argv[0]);
+    fprintf (fp,
+             "Usage: %s [options]\n\n"
+             "Options:\n"
+             "-d | --device name   Video device name [/dev/video]\n"
+             "-h | --help          Print this message\n"
+             "-m | --mmap          Use memory mapped buffers\n"
+             "-r | --read          Use read() calls\n"
+             "-u | --userp         Use application allocated buffers\n"
+             "",
+             argv[0]);
 }
 
-static const char short_options [] = "d:hmru";
-
-static const struct option
-long_options [] = {
-        { "device",     required_argument,      NULL,           'd' },
-        { "help",       no_argument,            NULL,           'h' },
-        { "mmap",       no_argument,            NULL,           'm' },
-        { "read",       no_argument,            NULL,           'r' },
-        { "userp",      no_argument,            NULL,           'u' },
-        { 0, 0, 0, 0 }
-};
 
 int main(int  argc,  char * argv[])
 {
@@ -683,7 +684,8 @@ int main(int  argc,  char * argv[])
 	return 0;
 }
 
-
+//hszhoushen
+//function: tcp初始化，accept一个链接
 int tcp_init(int argc, char * argv[])
 {
 
@@ -742,6 +744,8 @@ int tcp_init(int argc, char * argv[])
 	return 0;		
 }
 
+//hszhoushen
+//function：处理tcp初始化过程的错误
 void error_handling(char * message)
 {
 	fputs(message, stderr);
